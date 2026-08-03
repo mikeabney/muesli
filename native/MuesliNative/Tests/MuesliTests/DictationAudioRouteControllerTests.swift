@@ -120,6 +120,34 @@ struct DictationAudioRouteControllerTests {
 
         #expect(controller.preferredInputDeviceIDForDictation() == nil)
         #expect(!controller.systemDefaultInputIsBuiltInForDictation())
+
+        // Automatic meeting mic must defer to the true system default (e.g. a
+        // USB audio interface) instead of silently substituting the built-in
+        // mic, which would record from the wrong physical device.
+        #expect(controller.preferredInputDeviceIDForMeeting() == nil)
+        #expect(controller.meetingInputRouteSnapshot().preferredInputDeviceID == nil)
+    }
+
+    @Test("meeting uses system default recorder when headphone output default input is already built-in")
+    func meetingUsesSystemDefaultRecorderWhenHeadphoneOutputDefaultInputIsAlreadyBuiltIn() {
+        let inspector = FakeCoreAudioDeviceInspector(
+            defaultOutputDeviceID: 10,
+            outputRouteKind: .headphoneLike,
+            defaultInputDeviceID: 82,
+            builtInInputDeviceID: 82
+        )
+        let controller = DictationAudioRouteController(
+            inspector: inspector,
+            queue: DispatchQueue(label: "test.dictation-audio-route.meeting-headphone-default-built-in"),
+            observesDefaultOutputChanges: false
+        )
+
+        // The built-in mic is already the system default here, so forcing it
+        // through the app-scoped AudioQueue path would redundantly open a
+        // device already claimed as default — the same class of startup race
+        // #327 fixed. It must resolve to the shared system-default recorder.
+        #expect(controller.preferredInputDeviceIDForMeeting() == nil)
+        #expect(controller.meetingInputRouteSnapshot().preferredInputDeviceID == nil)
     }
 
     @Test("dictation prefers built-in mic for ambiguous Bluetooth unknown output")
@@ -271,8 +299,8 @@ struct DictationAudioRouteControllerTests {
         #expect(inspector.inspectionCallCount == inspectionCountBeforeSelection)
     }
 
-    @Test("meeting keeps explicit built-in routing when another microphone is default")
-    func meetingKeepsExplicitBuiltInRoutingForDifferentDefault() {
+    @Test("meeting honors a non-built-in default microphone for speaker output")
+    func meetingHonorsNonBuiltInDefaultMicrophoneForSpeakerOutput() {
         let inspector = FakeCoreAudioDeviceInspector(
             defaultOutputDeviceID: 10,
             outputRouteKind: .speakerLike,
@@ -291,10 +319,13 @@ struct DictationAudioRouteControllerTests {
         )
         routeQueue.sync {}
 
-        #expect(controller.preferredInputDeviceIDForMeeting() == 82)
+        // Automatic meeting mic must not force the built-in mic just because
+        // some other device is the system default (e.g. a USB audio
+        // interface) — it should defer to the system-default recorder, which
+        // honors the real default, the same as dictation already does.
+        #expect(controller.preferredInputDeviceIDForMeeting() == nil)
         let snapshot = controller.meetingInputRouteSnapshot()
-        #expect(snapshot.preferredInputDeviceID == 82)
-        #expect(snapshot.preferredInputDeviceName == "MacBook Microphone")
+        #expect(snapshot.preferredInputDeviceID == nil)
         #expect(snapshot.defaultInputDeviceName == "External Mic")
     }
 

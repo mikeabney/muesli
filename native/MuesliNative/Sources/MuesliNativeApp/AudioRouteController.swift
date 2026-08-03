@@ -416,6 +416,14 @@ final class DictationAudioRouteController: DictationAudioRouting {
         if let selectedInputDeviceID = snapshot.selectedInputDeviceID {
             return selectedInputDeviceID
         }
+        return routeAwareFallbackInputDeviceID(for: snapshot)
+    }
+
+    /// Route-based policy shared by dictation and meetings when neither has an
+    /// explicit device selected: prefer the built-in mic for headphone-like /
+    /// ambiguous-Bluetooth outputs (its own separate mic pairing is unreliable),
+    /// otherwise defer to the true system default input.
+    private static func routeAwareFallbackInputDeviceID(for snapshot: RouteSnapshot) -> AudioObjectID? {
         switch snapshot.outputRouteKind {
         case .headphoneLike:
             return snapshot.builtInInputDeviceID
@@ -427,13 +435,18 @@ final class DictationAudioRouteController: DictationAudioRouting {
     }
 
     private static func preferredMeetingInputDeviceID(for snapshot: RouteSnapshot) -> AudioObjectID? {
-        let desiredInputDeviceID = snapshot.selectedMeetingInputDeviceID ?? snapshot.builtInInputDeviceID
+        // An explicit meeting selection always wins. Otherwise, fall back to
+        // the same route-aware policy dictation uses — instead of
+        // unconditionally assuming the built-in mic, which silently hijacked
+        // meeting capture away from a non-built-in system default input
+        // (e.g. a USB audio interface).
+        let desiredInputDeviceID = snapshot.selectedMeetingInputDeviceID ?? routeAwareFallbackInputDeviceID(for: snapshot)
 
         // A nil meeting preference means "use the system-default recorder".
         // Avoid forcing the same physical device through the app-scoped
         // AudioQueue path: opening that second explicit input context can
         // disrupt a meeting client's already-running microphone graph.
-        guard desiredInputDeviceID != snapshot.defaultInputDeviceID else {
+        guard let desiredInputDeviceID, desiredInputDeviceID != snapshot.defaultInputDeviceID else {
             return nil
         }
         return desiredInputDeviceID
